@@ -2,6 +2,7 @@
 #include <ESP_EEPROM.h>
 #include <PolledTimeout.h>
 #include <LinkedList.h>
+#define ARDUINOJSON_USE_LONG_LONG 1
 #include <ArduinoJson.h>
 #include <algorithm> // std::min
 
@@ -11,10 +12,11 @@
 #define TCP_PORT 1324
 #define BREATH_MS 200
 
-time_t g_clock;
-long long g_lastTimeClockMillis = -1;
+time_t g_clock = 0;
+time_t g_clockSaved = 0;
 long long g_lastTimeClockUpdate = -1;
-long long g_lastTryTimeClockUpdate = -1; 
+long long g_lastTimeClockWebUpdate = -1;
+long long g_lastTryTimeClockWebUpdate = -1; 
 
 WiFiServer g_server(TCP_PORT);
 WiFiClient g_client;
@@ -44,46 +46,60 @@ void lerDataSistema() {
 
   if (calculateCheckSum(g_clock) != l_checksum) {
     Serial.println("checksum invalido");
-    g_clock = 1637442342;
-    gravarDataSistema();
+    g_clock = 0;
+    g_clockSaved = 0;
   } else {
-    g_lastTimeClockMillis = millis();
+    g_clockSaved = g_clock; 
   }
+
+  Serial.print("Data salva: ");
+  Serial.println(g_clock, DEC);
+}
+
+time_t currentUnixEpoch() {
+  time_t l_newClock = g_clock;
+
+  if (g_lastTimeClockUpdate < 0)
+    g_lastTimeClockUpdate = g_lastTimeClockWebUpdate;
+
+  if (g_lastTimeClockUpdate >= 0) {
+    long long l_millis = millis();
+    long long l_elapsedFromLastUpdate = 0;
+    l_elapsedFromLastUpdate = std::ceil((l_millis - g_lastTimeClockUpdate) / 1000);
+
+    if (l_elapsedFromLastUpdate > 0) // verifico se millis não reiniciou
+      l_newClock += l_elapsedFromLastUpdate;
+
+    if (l_elapsedFromLastUpdate > 60) {// caso o millis tenha passado um minuto
+      g_lastTimeClockUpdate = l_millis;
+      g_clock = l_newClock;
+    }
+  }
+
+  return l_newClock;
 }
 
 void gravarDataSistema() {
-  long long l_millis = millis();
+  time_t l_newClock = currentUnixEpoch();
+  long long l_delta = std::abs(g_clockSaved - l_newClock);
+  
+  if (l_delta < 5 * 60) 
+    return;
 
-  if ((g_lastTimeClockMillis >= 0) && (g_lastTimeClockMillis < l_millis)) {
-    int l_delta = (l_millis - g_lastTimeClockMillis);
-    if (l_delta < 5 * 60 * 1000) 
-      return;
-    g_clock = g_clock + l_delta;
-  }
+  Serial.print("Salvanda data: ");
+  Serial.println(l_newClock, DEC);
 
-  g_lastTimeClockMillis = l_millis;
-
-  Serial.print("NEW UNIX EPOCH: ");
-  Serial.println(g_clock, DEC);
-
-  char l_checksum = calculateCheckSum(g_clock);
+  char l_checksum = calculateCheckSum(l_newClock);
   EEPROMClass l_eeprom;
   l_eeprom.begin(sizeof(time_t) + sizeof(l_checksum));
-  l_eeprom.put(0, g_clock);
-  l_eeprom.put(sizeof(g_clock), l_checksum);
-  l_eeprom.end();    
+  l_eeprom.put(0, l_newClock);
+  l_eeprom.put(sizeof(l_newClock), l_checksum);
+  l_eeprom.end();  
+  
+  g_clockSaved = l_newClock;  
 }
 
-void setup() {
-  delay(2000);
-  Serial.begin(115200);
-  while (!Serial); // Wait until Serial is ready
-  Serial.println(ESP.getFullVersion());
-
-  lerDataSistema();
-  Serial.print("UNIX EPOCH: ");
-  Serial.println(g_clock, DEC);
-
+void inicializarWifi() {
   WiFi.disconnect();
   WiFi.mode(WIFI_STA);
   WiFi.begin(STASSID, STAPSK);
@@ -108,15 +124,21 @@ void setup() {
   g_server.begin();
 }
 
-LinkedList<String> splitString(String a_string, char a_sep) {
-  LinkedList<String> l_ret;
-  int l_lastPartEnd = 0;
+void setup() {
+  delay(2000);
+  Serial.begin(115200);
+  while (!Serial); // Wait until Serial is ready
+  Serial.println(ESP.getFullVersion());
 
-  Serial.println("split " + a_string);
-  Serial.print("sep ");
-  Serial.println(a_sep);
+  lerDataSistema();
+  inicializarWifi();
+}
 
-  for (int i = 0; i < a_string.length(); ++i) {
+LinkedList<String>* splitString(String a_string, char a_sep) {
+  LinkedList<String>* l_ret = new LinkedList<String>();
+  unsigned int l_lastPartEnd = 0;
+
+  for (unsigned int i = 0; i < a_string.length(); ++i) {
     if (a_string.charAt(i) == a_sep) {
       String l_part;
 
@@ -124,15 +146,14 @@ LinkedList<String> splitString(String a_string, char a_sep) {
         l_part = a_string.substring(l_lastPartEnd, i);
       }
 
-      Serial.print("sep at ");
-      Serial.println(i, DEC);
-
-      Serial.print("part ");
-      Serial.println(l_part);
-
-      l_ret.add(l_part);
+      l_ret->add(l_part);
       l_lastPartEnd = i + 1;
     }
+  }
+
+  if (l_lastPartEnd < a_string.length()) {
+      String l_part = a_string.substring(l_lastPartEnd);
+      l_ret->add(l_part);
   }
 
   return l_ret;
@@ -157,74 +178,64 @@ int monthNumber(String a_string) {
   return 0;
 }
 
-void parseLineDate(String a_date) {
+time_t parseHttpHeaderDate(String a_date) {
   // Date: Sat, 20 Nov 2021 21:22:09 GMT
-  LinkedList<String> l_parts = splitString(a_date, ' ');
   time_t l_newTime = 0;
   struct tm* l_ti = localtime ( &l_newTime );
+  LinkedList<String>* l_parts = splitString(a_date, ' ');
+  String l_time;
   
-  l_ti->tm_mday = l_parts.get(2).toInt() - 1900;
-  l_ti->tm_mon = monthNumber(l_parts.get(3));
-  l_ti->tm_year = l_parts.get(4).toInt();
+  l_ti->tm_mday = l_parts->get(2).toInt();
+  l_ti->tm_mon = monthNumber(l_parts->get(3));
+  l_ti->tm_year = l_parts->get(4).toInt() - 1900;
+  l_time = l_parts->get(5);
 
-  LinkedList<String> l_parts2 = splitString(l_parts[5], ':');
-  l_ti->tm_hour = l_parts2.get(0).toInt();
-  l_ti->tm_min = l_parts2.get(1).toInt();
-  l_ti->tm_sec = l_parts2.get(2).toInt();
+  delete l_parts;
 
-  Serial.print("l_ti->tm_mday");
-  Serial.println(l_ti->tm_mday, DEC);
-  Serial.print("l_ti->tm_mon");
-  Serial.println(l_ti->tm_mon, DEC);
-  Serial.print("l_ti->tm_year");
-  Serial.println(l_ti->tm_year, DEC);
+  l_parts = splitString(l_time, ':');
+  l_ti->tm_hour = l_parts->get(0).toInt();
+  l_ti->tm_min = l_parts->get(1).toInt();
+  l_ti->tm_sec = l_parts->get(2).toInt();
 
-  Serial.print("l_ti->tm_hour");
-  Serial.println(l_ti->tm_hour, DEC);
-  Serial.print("l_ti->tm_min");
-  Serial.println(l_ti->tm_min, DEC);
-  Serial.print("l_ti->tm_sec");
-  Serial.println(l_ti->tm_sec, DEC);
+  delete l_parts;
 
   l_newTime = mktime(l_ti);
-  Serial.print("l_newTime");
-  Serial.println(l_newTime, DEC);
 
-  // if (std::abs(l_newTime - g_clock) > 5 * 60 * 1000) {
-  //   g_clock = l_newTime;
-  //   g_lastTimeClockMillis = -1;// força a gravação da data no EEPROM
-  // }
+  return l_newTime;
 }
 
 void verificarBuscarNaWebADataHora() {
-  long long l_now = millis();
-
   while (g_clientClock.available()) {
     // read an incoming byte from the server and print them to serial monitor:
     String c = g_clientClock.readStringUntil('\n');
     if (c.startsWith("Date: ")) {
-      parseLineDate(c);
-      g_clientClock.stop();
+      time_t l_newTime = parseHttpHeaderDate(c);
 
-      Serial.print("g_clientClock.status()");
-      Serial.println(g_clientClock.status(), DEC);
-      g_lastTryTimeClockUpdate = l_now;
+      g_lastTimeClockWebUpdate = millis();
+      g_clock = l_newTime;
+
+      Serial.println(c);
+      Serial.print("Nova data da web: ");
+      Serial.println(g_clock);
+      
+      g_clientClock.stop();
     }
-    Serial.println(c);
   }
 
-  if ((g_lastTimeClockUpdate != -1) && (std::abs(g_lastTimeClockUpdate - l_now) < 60 * 60 * 1000)) {
+  long long l_millis = millis();
+
+  if ((g_lastTimeClockWebUpdate != -1) && (std::abs(g_lastTimeClockWebUpdate - l_millis) < 24 * 60 * 60 * 1000)) {
     return;
   }
 
-  if ((g_lastTryTimeClockUpdate != -1) && (std::abs(g_lastTryTimeClockUpdate - l_now) < 30 * 1000)) {
+  if ((g_lastTryTimeClockWebUpdate != -1) && (std::abs(g_lastTryTimeClockWebUpdate - l_millis) < 30 * 1000)) {
     return;
   }
 
   if (g_clientClock.status() == 0) {
     String l_host = "google.com.br";
 
-    Serial.print("verificarBuscarNaWebADataHora:");
+    g_lastTryTimeClockWebUpdate = l_millis;
     if (!g_clientClock.connect(l_host, 80)) {
       Serial.println("connection to " + l_host + " failed");
       return;
@@ -233,8 +244,8 @@ void verificarBuscarNaWebADataHora() {
     Serial.println("connected to " + l_host);
     g_clientClock.println(l_host + " / HTTP/1.1");
     g_clientClock.println("Host: " + l_host);
+    g_clientClock.println("Connection: close");
     g_clientClock.println(); // end HTTP request header
-    g_lastTimeClockUpdate = l_now;
   }
 }
 
@@ -289,6 +300,14 @@ void processarComandoRecebido(String a_comando) {
   DynamicJsonDocument l_doc(1024);
   deserializeJson(l_doc, a_comando);
 
+  if (l_doc["name"] == String("currentUnixEpoch")) {
+    DynamicJsonDocument l_response(1024);
+    l_response["name"] = l_doc["name"];
+    l_response["unixEpoch"] = currentUnixEpoch();
+    Serial.print("ToArduino:");
+    serializeJson(l_response, Serial);
+  }
+
   // TODO: ver quais comandos o arduino vai precisar mandar pra mim...
 }
 
@@ -301,4 +320,6 @@ void loop() {
   verificarSeTemNovoClient();
   verificarSeTemDadosNaSerial();
   verificarSeTemDadosNoCliente();
+
+  delay(10);
 }
