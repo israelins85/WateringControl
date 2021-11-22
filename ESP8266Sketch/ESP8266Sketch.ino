@@ -8,7 +8,6 @@
 
 #define STASSID "iPhone de Israel"
 #define STAPSK  "di120604"
-#define MAX_BUFFER 512
 #define TCP_PORT 1324
 #define BREATH_MS 200
 
@@ -21,8 +20,6 @@ long long g_lastTryTimeClockWebUpdate = -1;
 WiFiServer g_server(TCP_PORT);
 WiFiClient g_client;
 WiFiClient g_clientClock;
-char g_buffer[MAX_BUFFER];
-esp8266::polledTimeout::oneShotFastMs g_enoughMs(BREATH_MS);
 
 template<typename T>
 char calculateCheckSum(T v, char l_lastChecksum = 0) {
@@ -86,7 +83,7 @@ void gravarDataSistema() {
   if (l_delta < 5 * 60) 
     return;
 
-  Serial.print("Salvanda data: ");
+  Serial.print("Salvando data: ");
   Serial.println(l_newClock, DEC);
 
   char l_checksum = calculateCheckSum(l_newClock);
@@ -128,6 +125,7 @@ void setup() {
   delay(2000);
   Serial.begin(115200);
   while (!Serial); // Wait until Serial is ready
+  Serial.println("");
   Serial.println(ESP.getFullVersion());
 
   lerDataSistema();
@@ -205,13 +203,15 @@ time_t parseHttpHeaderDate(String a_date) {
 }
 
 void verificarBuscarNaWebADataHora() {
+  long long l_millis = millis();
+  
   while (g_clientClock.available()) {
     // read an incoming byte from the server and print them to serial monitor:
     String c = g_clientClock.readStringUntil('\n');
     if (c.startsWith("Date: ")) {
       time_t l_newTime = parseHttpHeaderDate(c);
 
-      g_lastTimeClockWebUpdate = millis();
+      g_lastTimeClockWebUpdate = l_millis;
       g_clock = l_newTime;
 
       Serial.println(c);
@@ -221,8 +221,6 @@ void verificarBuscarNaWebADataHora() {
       g_clientClock.stop();
     }
   }
-
-  long long l_millis = millis();
 
   if ((g_lastTimeClockWebUpdate != -1) && (std::abs(g_lastTimeClockWebUpdate - l_millis) < 24 * 60 * 60 * 1000)) {
     return;
@@ -257,18 +255,18 @@ void verificarSeTemNovoClient() {
 }
 
 void verificarSeTemDadosNaSerial() {
-  while (Serial.available() && !g_enoughMs) {
+  while (Serial.available()) {
     String l_data = Serial.readStringUntil('\n');
-    if (!g_client.connected()) {
-      continue;
+    if (l_data.startsWith("ToESP:")) {
+      processarComandoRecebido(l_data.substring(6));
     }
     if (l_data.startsWith("ToClient:")) {
+      if (!g_client.connected()) {
+        continue;
+      }
       // remove a string "ToClient:" e manda pro cliente o dado
       g_client.println(l_data.substring(9));
       g_client.flush();
-    }
-    if (l_data.startsWith("ToESP:")) {
-      processarComandoRecebido(l_data.substring(6));
     }
   }
 }
@@ -284,12 +282,18 @@ void verificarSeTemDadosNoCliente() {
     return;
   }
 
-  if (g_client.available() && !g_enoughMs) {
-    int readed = g_client.read(g_buffer, MAX_BUFFER);
-    Serial.print("ToArduino:");
-    Serial.write(g_buffer, readed);
-    Serial.println("\n");
-    Serial.flush();
+  while (g_client.available()) {
+    String l_data = g_client.readStringUntil('\n');
+    if (l_data.length() == 0) break;
+    if (l_data.startsWith("ToESP:")) {
+      processarComandoRecebido(l_data.substring(6));
+    } else {
+      if (!l_data.startsWith("ToArduino:")) {
+        Serial.print("ToArduino:");
+      }
+      Serial.println(l_data);
+      Serial.flush();
+    }
     // echo to client
     // g_client.write(g_buffer, readed);
     // g_client.flush();
@@ -306,14 +310,13 @@ void processarComandoRecebido(String a_comando) {
     l_response["unixEpoch"] = currentUnixEpoch();
     Serial.print("ToArduino:");
     serializeJson(l_response, Serial);
+    Serial.println("");
   }
 
   // TODO: ver quais comandos o arduino vai precisar mandar pra mim...
 }
 
 void loop() {
-  g_enoughMs.reset(BREATH_MS);
-  
   verificarBuscarNaWebADataHora();
   gravarDataSistema();
 
