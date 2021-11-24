@@ -2,41 +2,40 @@
 // https://arduinojson.org/?utm_source=meta&utm_medium=library.properties
 
 // dinamicas
-int g_vlrSensorVolume = 0; // 0 - 10000
-int g_vlrSensorUmidade = 0; // 0 - 10000
-int g_vlrSensorTempo = 0; // 0 - 10000
-int g_vlrSensorIluminacao = 0; // 0 - 10000
+int g_vlrSensorVolume = 0; // 0 - 1023
+int g_vlrSensorUmidade = 0; // 0 - 1023
+int g_vlrSensorIluminacao = 0; // 0 - 1023
 
 StaticJsonDocument<256> g_ultComandoRecebido;
 StaticJsonDocument<256> g_reposta;
 
 enum class Sensor {
-  Nenhum,
+  Nenhum = -1,
   Umidade,
   Temperatura,
   Iluminacao  
 };
 
-enum class Operador {
-  Menor = -1,
-  Igual = 0,
-  Maior = 1  
+enum class Operador { // tem q ser de acordo com o index do combo na aplicação
+  Menor = 0,
+  Igual = 1,
+  Maior = 2  
 };
 
 struct RegraItem {
-  Sensor sensor = Sensor.Nenhum;
-  Operador operador;
+  bool ativa = false;
+  char operador;
   int valor = 0;
 
-  // {sensor": 1, "operador": -1, "valor": 30}
+  // {"ativa": false, "operador": -1, "valor": 30}
 };
 
 struct Regra {
   bool ativa = false;
-  LinkedList<RegraItem> itens;
+  RegraItem sensores[3]; // index é igual ao enum Sensor
   int tempoParaRegar = 0;
   
-  // {"ativa":true, [{"sensor": 1, "operador": -1, "valor": 30}], "tempoParaRegar": 10}
+  // {"ativa":true, "sensores": [{"ativo": false, "operador": -1, "valor": 30}], "tempoParaRegar": 10}
 };
 
 String g_wifiSsid = "WateringControl";
@@ -46,7 +45,11 @@ String g_wifiIp = "192.168.0.5";
 // configurações
 int g_vlrSensorVolumeMin = 0; // 0 - 10000
 int g_vlrSensorVolumeMax = 10000; // 0 - 10000
-Regra g_regras[5];
+struct Configuracoes {
+  long long tempoMinEntreAsRegas = 0;
+  Regra g_regras[5];
+};
+Configuracoes g_configuracoes;
 
 // Caio
 void lerConfiguracao() {
@@ -61,7 +64,6 @@ void gravarConfiguracao() {
 // Felipe
 void inicializarWifi() {
   // verificar como inicializar o wifi
-  g_wifiClient
 }
 
 // Soter
@@ -132,7 +134,7 @@ void regaManual() {
 }
 
 // Gean
-void regras() {
+void configuracoes() {
   // preencher a variavel e gravar a config
   retornaComandoProcessado();
 }
@@ -142,7 +144,7 @@ void regras() {
 //   {"ativa":true, [{"sensor": 1, "operador": -1, "valor": 30}], "tempoParaRegar": 10},
 //   {"ativa":true, [{"sensor": 1, "operador": -1, "valor": 70}, {"sensor": 2, "operador": -1, "valor": 50}], "tempoParaRegar": 5}
 // ]
-void setRegras(JsonArray args) {
+void setConfiguracoes() {
   // preencher a variavel e gravar a config
   retornaComandoProcessado();
 }
@@ -150,18 +152,18 @@ void setRegras(JsonArray args) {
 // Caio
 void processarComandoRecebido() {
   // para cada possível comando, chamar o método
-  if (stricmp(m_ultComandoRecebido["nome"], "calibrarReservatorioVazio") == 0) {
+  if (stricmp(g_ultComandoRecebido["nome"], "calibrarReservatorioVazio") == 0) {
     calibrarReservatorioVazio();
   }
-  if (stricmp(m_ultComandoRecebido["nome"], "setRegras") == 0) {
-    setRegras(m_ultComandoRecebido["args"]);
+  if (stricmp(g_ultComandoRecebido["nome"], "setConfiguracoes") == 0) {
+    setConfiguracoes();
   }
 }
 
 // Israel
 void receberComando() {
   if (!g_conecao.avail()) return;
-  deserializeJson(m_ultComandoRecebido, g_wifiClient);
+  deserializeJson(g_ultComandoRecebido, g_wifiClient);
   processarComandoRecebido();
 }
 
