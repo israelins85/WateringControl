@@ -1,0 +1,3 @@
+[submodule "Ultrasonic"]
+	path = Ultrasonic
+	url = https://github.com/israelins85/Ultrasonic.git
