@@ -258,7 +258,7 @@ void verificarSeTemDadosNaSerial() {
   while (Serial.available()) {
     String l_data = Serial.readStringUntil('\n');
     if (l_data.startsWith("ToESP:")) {
-      processarComandoRecebido(l_data.substring(6));
+      processarComandoRecebido(l_data.substring(6), Serial);
     }
     if (l_data.startsWith("ToClient:")) {
       if (!g_client.connected()) {
@@ -286,7 +286,7 @@ void verificarSeTemDadosNoCliente() {
     String l_data = g_client.readStringUntil('\n');
     if (l_data.length() == 0) break;
     if (l_data.startsWith("ToESP:")) {
-      processarComandoRecebido(l_data.substring(6));
+      processarComandoRecebido(l_data.substring(6), g_client);
     } else {
       if (!l_data.startsWith("ToArduino:")) {
         Serial.print("ToArduino:");
@@ -300,20 +300,44 @@ void verificarSeTemDadosNoCliente() {
   }
 }
 
-void processarComandoRecebido(String a_comando) {
+void currentUnixEpoch(const DynamicJsonDocument& /*a_cmd*/, DynamicJsonDocument& a_resp) {
+    a_resp["unixEpoch"] = currentUnixEpoch();
+    a_resp["sucess"] = true;
+}
+
+struct FunctionByNome {
+  String nome;
+  void (*fun_ptr)(const DynamicJsonDocument&, DynamicJsonDocument&);
+
+  FunctionByNome();
+  FunctionByNome(String a_nome, void (*a_fun_ptr)(const DynamicJsonDocument&, DynamicJsonDocument&)) :
+    nome(a_nome), fun_ptr(a_fun_ptr) {}
+};
+
+FunctionByNome g_functions[] = {
+  FunctionByNome("currentUnixEpoch", currentUnixEpoch)
+};
+
+void processarComandoRecebido(String a_comando, Stream& a_quemPediu) {
   DynamicJsonDocument l_doc(1024);
+  DynamicJsonDocument l_response(1024);
   deserializeJson(l_doc, a_comando);
 
-  if (l_doc["name"] == String("currentUnixEpoch")) {
-    DynamicJsonDocument l_response(1024);
-    l_response["name"] = l_doc["name"];
-    l_response["unixEpoch"] = currentUnixEpoch();
-    Serial.print("ToArduino:");
-    serializeJson(l_response, Serial);
-    Serial.println("");
+  l_response["nome"] = l_doc["nome"];
+  for (int f = 0; f < sizeof(g_functions) / sizeof(FunctionByNome); ++f) {
+    l_doc["nome"] == String("currentUnixEpoch")
   }
 
-  // TODO: ver quais comandos o arduino vai precisar mandar pra mim...
+  if (!l_found) {
+    l_response["sucess"] = false;
+    l_response["error"] = "Método não encontrado";
+  }
+
+  if (a_quemPediu == Serial) {
+      a_quemPediu.print("ToArduino:");
+  }
+  serializeJson(l_response, a_quemPediu);
+  a_quemPediu.println("");
 }
 
 void loop() {
