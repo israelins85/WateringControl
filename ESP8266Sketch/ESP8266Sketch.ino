@@ -10,12 +10,10 @@
 #define STAPSK  "di120604"
 #define TCP_PORT 1324
 
-struct RegraItem {
+struct RegraSensor {
   bool ativa = false;
   String operador;
   int valor = 0;
-
-  // {"ativa": false, "operador": -1, "valor": 30}
 };
 
 struct RegraHorario {
@@ -24,15 +22,13 @@ struct RegraHorario {
   int minutoInicio = 0;
   int horaFim = 0;
   int minutoFim = 0;
-  String operador;
-} 
+};
 
 struct Regra {
   bool ativa = false;
   RegraHorario horario;
-  RegraItem sensores[3]; // index é umidade = 0, temperatura = 1, iluminacao = 2
-  int tempoParaRegar = 0;
-  // {"ativa":true, "sensores": [{"ativo": false, "operador": -1, "valor": 30}], "tempoParaRegar": 10}
+  RegraSensor sensores[3]; // index é umidade = 0, temperatura = 1, iluminacao = 2
+  unsigned int tempoParaRegar = 0;
 };
 
 struct Sensores {
@@ -66,17 +62,127 @@ unsigned long g_millisBombaLigada = 0;
 unsigned long g_millisParaManterBombaLigada = 0;
 
 // configurações
-int g_currentConfiguracoesStructVersion = 1;
+unsigned int g_currentConfiguracoesStructVersion = 20211201;
 struct Configuracoes {
   time_t unixEpoch = 0;
   int vlrSensorVolumeVazio = 0; // em cm
   int vlrSensorVolumeCheio = 100; // em cm
   int vlrSensorIluminacaoMax = 0; // em cm
-  long long tempoMinEntreAsRegas = 0;
+  int tempoMinEntreAsRegas = 0;
   Regra regras[5];
 };
 Configuracoes g_configuracoes;
 bool g_configuracoesDirty = false;
+
+
+
+namespace ARDUINOJSON_NAMESPACE {
+template <>
+struct Converter<RegraSensor> {
+  static bool toJson(const RegraSensor& src, VariantRef dst) {
+    dst["ativa"] = src.ativa;
+    dst["operador"] = src.operador;
+    dst["valor"] = src.valor;
+    return true;
+  }
+
+  static RegraSensor fromJson(VariantConstRef src) {
+    RegraSensor l_ret;
+    l_ret.ativa = src["ativa"];
+    l_ret.operador = src["operador"].as<const char*>();
+    l_ret.valor = src["valor"];
+    return l_ret;
+  }
+
+  static bool checkJson(VariantConstRef src) {
+    return src["ativa"].is<bool>() && src["operador"].is<const char*>() && src["valor"].is<int>();
+  }
+};
+
+template <>
+struct Converter<RegraHorario> {
+  static bool toJson(const RegraHorario& src, VariantRef dst) {
+    dst["restringir"] = src.restringir;
+    dst["horaInicio"] = src.horaInicio;
+    dst["minutoInicio"] = src.minutoInicio;
+    dst["horaFim"] = src.horaFim;
+    dst["minutoFim"] = src.minutoFim;
+    return true;
+  }
+
+  static RegraHorario fromJson(VariantConstRef src) {
+    RegraHorario l_ret;
+    l_ret.restringir = src["restringir"];
+    l_ret.horaInicio = src["horaInicio"];
+    l_ret.minutoInicio = src["minutoInicio"];
+    l_ret.horaFim = src["horaFim"];
+    l_ret.minutoFim = src["minutoFim"];
+    
+    return l_ret;
+  }
+
+  static bool checkJson(VariantConstRef src) {
+    return src["restringir"].is<bool>() 
+      && src["horaInicio"].is<int>() && src["minutoInicio"].is<int>() 
+      && src["horaFim"].is<int>() && src["minutoFim"].is<int>();
+  }
+};
+
+template <>
+struct Converter<Regra> {
+  static bool toJson(const Regra& src, VariantRef dst) {
+    dst["ativa"] = src.ativa;
+    dst["horario"] = src.horario;
+    JsonArray l_sensores = dst.createNestedArray("sensores");
+    for (unsigned int i = 0; i < (sizeof(src.sensores) / sizeof(RegraSensor)); ++i) {
+      l_sensores.add(src.sensores[i]);  
+    }
+    dst["tempoParaRegar"] = src.tempoParaRegar;
+    return true;
+  }
+
+  static Regra fromJson(VariantConstRef src) {
+    Regra l_ret;
+    l_ret.ativa = src["ativa"];
+    l_ret.horario = src["horario"];
+    JsonArrayConst l_sensores = src["sensores"];
+    for (unsigned int i = 0; i < (sizeof(l_ret.sensores) / sizeof(RegraSensor)); ++i) {
+      l_ret.sensores[i] = l_sensores[i];  
+    }
+    return l_ret;
+  }
+
+  static bool checkJson(VariantConstRef src) {
+    return src["ativa"].is<bool>() && src["horario"].is<JsonObject>() && src["sensores"].is<JsonArray>();
+  }
+};
+
+template <>
+struct Converter<Configuracoes> {
+  static bool toJson(const Configuracoes& src, VariantRef dst) {
+    dst["tempoMinEntreAsRegas"] = src.tempoMinEntreAsRegas;
+    JsonArray l_regras = dst.createNestedArray("regras");
+    for (unsigned int i = 0; i < (sizeof(src.regras) / sizeof(Regra)); ++i) {
+      l_regras.add(src.regras[i]);  
+    }
+    return true;
+  }
+
+  static Configuracoes fromJson(VariantConstRef src) {
+    Configuracoes l_ret;
+    l_ret.tempoMinEntreAsRegas = src["tempoMinEntreAsRegas"];
+    JsonArrayConst l_regras = src["regras"];
+    for (unsigned int i = 0; i < (sizeof(l_ret.regras) / sizeof(Regra)); ++i) {
+      l_ret.regras[i] = l_regras[i];  
+    }
+    return l_ret;
+  }
+
+  static bool checkJson(VariantConstRef src) {
+    return src["tempoMinEntreAsRegas"].is<int>() && src["regras"].is<JsonArray>();
+  }
+};
+};
 
 time_t g_lastSaveUnixEpoch = 0;
 long long g_lastTimeClockUpdate = -1;
@@ -136,7 +242,7 @@ unsigned long calculateCheckSum(T a_data, unsigned long a_lastChecksum = ~0L) {
 Configuracoes configuracoesIniciais() {
   Configuracoes l_ret;
   Regra& l_regra = l_ret.regras[0];
-  RegraItem& l_item = l_regra.sensores[0];
+  RegraSensor& l_item = l_regra.sensores[0];
 
   g_configuracoesDirty = true;
   l_regra.ativa = true;
@@ -148,9 +254,9 @@ Configuracoes configuracoesIniciais() {
 }
 
 void lerConfiguracoes() {
-  Serial.print("EEPROM length: ");
+  Serial.print("EEPROM size(): ");
   Serial.println(EEPROM.length());
-  Serial.print("Configuracoes length: ");
+  Serial.print("Configuracoes size(): ");
   Serial.println(sizeof(Configuracoes));
   
   unsigned long l_version = 0;
@@ -352,8 +458,8 @@ void verificarBuscarNaWebADataHora() {
 }
 
 void currentUnixEpoch(const DynamicJsonDocument& /*a_cmd*/, DynamicJsonDocument& a_resp) {
-    a_resp["unixEpoch"] = currentUnixEpoch();
-    a_resp["sucess"] = true;
+  a_resp["unixEpoch"] = currentUnixEpoch();
+  a_resp["sucess"] = true;
 }
 
 void calibrarReservatorioVazio(const DynamicJsonDocument& /*a_cmd*/, DynamicJsonDocument& a_resp) {
@@ -373,9 +479,9 @@ void calibrarReservatorioCheio(const DynamicJsonDocument& /*a_cmd*/, DynamicJson
 void sensores(const DynamicJsonDocument& /*a_cmd*/, DynamicJsonDocument& a_resp) {
   a_resp["sucess"] = true;
   a_resp["umidade"] = g_sensores.umidade;
-  a_resp["iluminacao"] = g_sensores.iluminacao;
+  a_resp["iluminacao"] = g_sensores.iluminacaoPerc;
   a_resp["temperatura"] = g_sensores.temperatura;
-  a_resp["volume"] = map(g_sensores.volume, g_configuracoes.vlrSensorVolumeVazio, g_configuracoes.vlrSensorVolumeCheio, 0, 100);
+  a_resp["volume"] = g_sensores.volumePerc;
 }
 
 void regaManual(const DynamicJsonDocument& /*a_cmd*/, DynamicJsonDocument& a_resp) {
@@ -389,15 +495,19 @@ void regaManual(const DynamicJsonDocument& /*a_cmd*/, DynamicJsonDocument& a_res
 
 void configuracoes(const DynamicJsonDocument& /*a_cmd*/, DynamicJsonDocument& a_resp) {
   // preencher a variavel e gravar a config
+  // a_resp.as<JsonObject>() = g_configuracoes;
+  ARDUINOJSON_NAMESPACE::Converter<Configuracoes>::toJson(g_configuracoes, a_resp.as<JsonObject>());
+  a_resp["sucess"] = true;
 }
 
-// JsonArray =>
-// [
-//   {"ativa":true, [{"sensor": 1, "operador": -1, "valor": 30}], "tempoParaRegar": 10},
-//   {"ativa":true, [{"sensor": 1, "operador": -1, "valor": 70}, {"sensor": 2, "operador": -1, "valor": 50}], "tempoParaRegar": 5}
-// ]
 void setConfiguracoes(const DynamicJsonDocument& a_cmd, DynamicJsonDocument& a_resp) {
   // preencher a variavel e gravar a config
+  Configuracoes l_new = a_cmd.as<Configuracoes>();
+// seto apenas o que vem do app  
+  g_configuracoes.tempoMinEntreAsRegas = l_new.tempoMinEntreAsRegas;
+  for (unsigned int i = 0; i < (sizeof(g_configuracoes.regras) / sizeof(Regra)); ++i) {
+    g_configuracoes.regras[i] = l_new.regras[i];
+  }
 
   g_configuracoesDirty = true;
   a_resp["sucess"] = true;
@@ -448,16 +558,6 @@ void processarComandoRecebidoCliente(String a_comando) {
   g_client.println("");
 }
 
-/*
-
-  int volume = 0; // medida em mm
-  int volumePerc = 0;
-  int umidade = 0; // 0 - 1023
-  int iluminacao = 0; // 0 - 1023
-  int iluminacaoPerc = 0;
-  int temperatura = 0; // 0 - 1023
-
-*/
 void setSensores(const DynamicJsonDocument& a_data) {
   Sensores l_new;
 
@@ -561,21 +661,27 @@ void verificarSeTemDadosNoCliente() {
 }
 
 
-// struct RegraItem {
+
+// struct RegraSensor {
 //   bool ativa = false;
 //   String operador;
 //   int valor = 0;
-
-//   // {"ativa": false, "operador": -1, "valor": 30}
 // };
+
+// struct RegraHorario {
+//   bool restringir = false;
+//   int horaInicio = 0;
+//   int minutoInicio = 0;
+//   int horaFim = 0;
+//   int minutoFim = 0;
+//   String operador;
+// } 
 
 // struct Regra {
 //   bool ativa = false;
-//   int horarioInicio = 0;
-//   int horarioFinal = 0;
-//   RegraItem sensores[3]; // index é umidade = 0, temperatura = 1, iluminacao = 2
+//   RegraHorario horario;
+//   RegraSensor sensores[3]; // index é umidade = 0, temperatura = 1, iluminacao = 2
 //   int tempoParaRegar = 0;
-//   // {"ativa":true, "sensores": [{"ativo": false, "operador": -1, "valor": 30}], "tempoParaRegar": 10}
 // };
 
 bool validarRegraParaLigarBomba(const Regra& a_r) {
